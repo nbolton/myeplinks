@@ -1,46 +1,5 @@
 import libxml2, httplib, re
 
-class LinkInfo:
-	def __init__(self, gen, value):
-		self.gen = gen
-		self.parts = self.getParts(value)
-
-	def getParts(self, value):
-		# trim as the user specifies
-		if len(self.gen.trim) != 0:
-			for trim in self.gen.trim:
-				if value.startswith(trim):
-					value = value[len(trim):]
-				elif value.endswith(trim):
-					value = value[:-len(trim)]
-		
-		# if no split specified, 1 part is returned, which is fine
-		return value.split(self.gen.split)
-	
-	def getText(self):
-		text = self.gen.textfmt
-		i = 0
-		# for each part of the xpath match, return the link text
-		for part in self.parts:
-			text = text.replace('{' + str(i) + '}', part)
-			i += 1
-		return text
-	
-	def getUrl(self):
-		link = self.gen.linkfmt
-		i = 0
-		# for each part of whatever the user wants to process in to links...
-		for part in self.parts:
-			if self.gen.regex.has_key(i):
-				# regex replace (first array item is the match, second is the replace)
-				part = re.sub(self.gen.regex[i][0], self.gen.regex[i][1], part)
-			link = link.replace('{' + str(i) + '}', part)
-			i += 1
-		if self.gen.spacechar:
-			# replace space with another char (useful for URLs)
-			link = link.replace(' ', self.gen.spacechar)
-		return link
-
 class FeedDownloader:
 	def downloadFeed(self, feedUrl):
 		# we alreayd know we're using http, so discard the protocol
@@ -61,24 +20,70 @@ class FeedDownloader:
 			raise Exception('Unable to download feed: %i %s' % (resp.status, resp.reason))
 		
 		return resp.read()
+
+class TargetInfo:
+	def __init__(self, extractor, value):
+		self.extractor = extractor
+		self.parts = self.getParts(value)
+
+	def getParts(self, value):
+		# trim as the user specifies
+		if len(self.extractor.trim) != 0:
+			for trim in self.extractor.trim:
+				if value.startswith(trim):
+					value = value[len(trim):]
+				elif value.endswith(trim):
+					value = value[:-len(trim)]
 		
+		# if no split specified, 1 part is returned, which is fine
+		return value.split(self.extractor.split)
+	
+	def getString(self, fmt, spacechar=None):
+		string = fmt
+		i = 0
+		# for each part of whatever the user wants to process...
+		for part in self.parts:
+			if self.extractor.regex.has_key(i):
+				# regex replace (first array item is the match, second is the replace)
+				part = re.sub(self.extractor.regex[i][0], self.extractor.regex[i][1], part)
+			string = string.replace('{' + str(i) + '}', part)
+			i += 1
+		if spacechar:
+			# replace space with another char (useful for URLs)
+			string = string.replace(' ', spacechar)
+		return string
+
+class TargetExtractor:
+	def __init__(self, xpath, trim, split, regex):
+		self.xpath = xpath
+		self.trim = trim
+		self.split = split
+		self.regex = regex
+		
+	def getTargets(self, feedXml):
+		# the user's xpath should return a list of targets, and for each 
+		# target, we create a TargetInfo object and return them as a 
+		# collection (each of which could represent a link for example)
+		doc = libxml2.parseDoc(feedXml)
+		nodes = doc.xpathEval(self.xpath)
+		return [TargetInfo(self, node.content) for node in nodes]
+
 class HtmlFileGenerator:
 	def __init__(self, xpath, linkfmt, textfmt, split, trim, spacechar, regex):
-		self.regex = regex
-		self.xpath = xpath
 		self.linkfmt = linkfmt
 		self.textfmt = textfmt
-		self.split = split
-		self.trim = trim
 		self.spacechar = spacechar
+		self.fd = FeedDownloader()
+		self.te = TargetExtractor(xpath, trim, split, regex)
 	
-	def generateHtml(self, links):
-		
-		# create a list of URLs
+	def generateHtml(self, targets):
 		html = '<ul>\n'
-		for link in links:
+		
+		# for each item, add a new url
+		for target in targets:
 			html += '<li><a href="%s" target="_blank">%s</a></li>\n' % (
-				link.getUrl(), link.getText()
+				target.getString(self.linkfmt, self.spacechar),
+				target.getString(self.textfmt)
 			)
 			
 		html += '</ul>\n'
@@ -89,24 +94,16 @@ class HtmlFileGenerator:
 		file = open(outfile, 'w')
 		file.write(html)
 		file.close()
-		
-	def getLinks(self, feedXml):
-		# use xpath to extract whatever the user specified with their xpath,
-		# and return a collection of LinkInfo objects
-		doc = libxml2.parseDoc(feedXml)
-		nodes = doc.xpathEval(self.xpath)
-		return [LinkInfo(self, node.content) for node in nodes]
 
 	def genFromUrl(self, feedUrl, outfile):
 		# download the feed xml
-		fd = FeedDownloader()
-		feedXml = fd.downloadFeed(feedUrl)
+		feedXml = self.fd.downloadFeed(feedUrl)
 		
-		# create some easy to use link objects
-		links = self.getLinks(feedXml)
+		# create some easy to use target objects
+		targets = self.te.getTargets(feedXml)
 		
 		# generate the html
-		html = self.generateHtml(links)
+		html = self.generateHtml(targets)
 		
 		# and save to file
 		self.writeToFile(html, outfile)
