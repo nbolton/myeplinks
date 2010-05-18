@@ -1,4 +1,4 @@
-import libxml2, httplib, re, os, urllib, logging
+import libxml2, httplib, re, os, urllib, logging, time
 from xml.dom import minidom
 
 class LoggerFactory:
@@ -161,6 +161,8 @@ class TargetPair:
 		self.proc = proc
 		
 class TargetProcessor:
+	sourceQuerySleep = 10 # seconds
+
 	def __init__(self, linkfmt, actionLinkfmt, procRecFile, spacechar, srcTe, procTe, actionResult, log=LoggerFactory().empty()):
 		self.log = log
 		self.linkfmt = linkfmt
@@ -238,12 +240,21 @@ class TargetProcessor:
 				# assume that each target will get us a link to an xml feed
 				xml = self.downloader.download(sourceUrl)
 				
-				# get some sub-targets as can be found in the xml
-				subTargets = self.procTe.getTargets(xml)
+				if xml:
+					# get some sub-targets as can be found in the xml
+					subTargets = self.procTe.getTargets(xml)
+					
+					if len(subTargets) > 0:
+						# but only use the first (if there are any at all)
+						procTargets.append(TargetPair(sourceUrl, subTargets[0]))
 				
-				if len(subTargets) > 0:
-					# but only use the first (if there are any at all)
-					procTargets.append(TargetPair(sourceUrl, subTargets[0]))
+				else:
+					self.log.error(
+						'no xml returned from url: ' + sourceUrl)
+				
+				# don't spam the sources
+				time.sleep(self.sourceQuerySleep)
+				
 			else:
 				self.log.debug(
 					'ignoring already successful source, %s (%s)' % (
