@@ -63,9 +63,10 @@ class HttpDownloader:
 		return resp.read()
 
 class TargetInfo:
-	def __init__(self, extractor, value):
+	def __init__(self, extractor, values):
 		self.extractor = extractor
-		self.parts = self.getParts(value)
+		self.values = values
+		self.parts = self.getParts(values[0])
 
 	def getParts(self, value):
 		# trim as the user specifies
@@ -99,6 +100,8 @@ class TargetInfo:
 		return string
 
 class TargetExtractor:
+	subNodes = []
+
 	def __init__(self, xpath, trim=None, split=None, regex=None, log=LoggerFactory().empty()):
 		self.log = log
 		self.xpath = xpath
@@ -112,8 +115,27 @@ class TargetExtractor:
 		# collection (each of which could represent a link for example)
 		doc = libxml2.parseDoc(feedXml)
 		nodes = doc.xpathEval(self.xpath)
-		nodes = doc.xpathEval(self.xpath)
-		return [TargetInfo(self, node.content) for node in nodes]
+		targets = []
+		for node in nodes:
+			content = self.getNodeText(node)
+			if len(content) > 0:
+				targets += [TargetInfo(self, content),]
+		return targets
+
+	def getNodeText(self, node):
+		if self.subNodes:
+			content = []
+			for sn in self.subNodes:
+				sub = node.xpathEval(self.xpath + "/" + sn)
+				if len(sub) > 0:
+					content += [sub[0].content,]
+				else:
+					# if one sub node is missing, then the result
+					# isn't valid, so return nothing.
+					return []
+			return content
+		else:
+			return [node.content,]
 
 class HtmlFileGenerator:
 	def __init__(self, linkfmt, textfmt, spacechar, te):
@@ -244,9 +266,19 @@ class TargetProcessor:
 					# get some sub-targets as can be found in the xml
 					subTargets = self.procTe.getTargets(xml)
 					
-					if len(subTargets) > 0:
-						# but only use the first (if there are any at all)
-						procTargets.append(TargetPair(sourceUrl, subTargets[0]))
+					for st in subTargets:
+
+						# the url matcher may be a bit dumb, so double check the result.
+						self.log.debug('checking that "%s" begins with "%s"', st.values[1], source.parts[0])
+						if st.values[1].startswith(source.parts[0]):
+
+							# but only use the first (if there are any at all)
+							self.log.debug('adding processor target: ' + st.values[1])
+							procTargets.append(TargetPair(sourceUrl, subTargets[0]))
+							break
+
+						else:
+							self.log.debug('ignoring bogus result: %s', st.parts[0])
 				
 				else:
 					self.log.error(
